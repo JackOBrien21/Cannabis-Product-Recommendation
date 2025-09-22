@@ -1,38 +1,86 @@
-# path: scripts/list_product_titles.py
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+# path: scripts/extract_product_hrefs.py
+"""
+Extract product hrefs from saved category HTML pages.
+
+Looks for: <a data-testid="product-card-menu-link-body" href="..."> … </a>
+
+Usage:
+  python scripts/extract_product_hrefs.py --dir html_formats
+"""
+
+from __future__ import annotations
+import argparse
+from pathlib import Path
+from typing import Dict, List
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
-URL = "https://cannabisrealmny.com/white-plains/menu/categories/concentrates"
+# Group → filename mapping
+FILE_MAP: Dict[str, str] = {
+    "concentrates": "html_format_concentrates.txt",
+    "edibles":      "html_format_edibles.txt",
+    "flower":       "html_format_flower.txt",
+    "hash":         "html_format_hash.txt",
+    "pre-rolls":    "html_format_pre-rolls.txt",
+    "vaporizers":   "html_format_vaporizers.txt",
+}
 
-def main():
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--no-sandbox")
+DOMAIN = "https://cannabisrealmny.com/"
 
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=opts)
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="Extract product hrefs from saved HTML files.")
+    ap.add_argument("--dir", default="html_formats", help="Directory with html_format_*.txt files")
+    ap.add_argument("--counts-only", action="store_true", help="Only print counts per group")
+    return ap.parse_args()
 
-    driver.get(URL)
-    html = driver.page_source
-    driver.quit()
-
+def extract_hrefs_from_file(path: Path) -> List[str]:
+    html = path.read_text(encoding="utf-8", errors="ignore")
     soup = BeautifulSoup(html, "html.parser")
+    anchors = soup.select('a[data-testid="product-card-menu-link-body"][href]')
+    seen = set()
+    hrefs: List[str] = []
+    for a in anchors:
+        href = a.get("href", "").strip()
+        if href and href not in seen:
+            seen.add(href)
+            hrefs.append(urljoin(DOMAIN, href))  # prefix with domain
+    return hrefs
 
-    # find all product cards
-    products = soup.find_all("a", {"data-testid": "product-card-menu-link-body"})
-    print(f"Found {len(products)} products\n")
+def main() -> int:
+    args = parse_args()
+    root = Path(args.dir)
 
-    for idx, product in enumerate(products, start=1):
-        # title is inside the <div data-testid="product-name-...">
-        title_div = product.find("div", {"data-testid": lambda v: v and v.startswith("product-name-")})
-        if title_div:
-            print(f"{idx}. {title_div.get_text(strip=True)}")
-        else:
-            print(f"{idx}. [NO TITLE FOUND]")
+    if not root.exists():
+        print(f"[ERR] Directory not found: {root.resolve()}")
+        return 2
+
+    grand_total = 0
+    combined_seen = set()
+
+    for group, fname in FILE_MAP.items():
+        fpath = root / fname
+        if not fpath.exists():
+            print(f"[WARN] Missing file for {group}: {fpath}")
+            continue
+
+        hrefs = extract_hrefs_from_file(fpath)
+        count = len(hrefs)
+        grand_total += count
+        print(f"\n=== {group} ===")
+        print(f"File: {fpath.name}")
+        print(f"Hrefs found: {count}")
+
+        if not args.counts_only:
+            for h in hrefs:
+                print(h)
+
+        combined_seen.update(hrefs)
+
+    print("\n=== SUMMARY ===")
+    print(f"Groups processed: {len(FILE_MAP)}")
+    print(f"Combined unique hrefs: {len(combined_seen)}")
+    print(f"Grand total (raw, may include duplicates across groups): {grand_total}")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
